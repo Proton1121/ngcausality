@@ -4,37 +4,36 @@ import numpy as np
 from copy import deepcopy
 
 
-class LSTM(nn.Module):
+class GRU(nn.Module):
     def __init__(self, num_series, hidden):
         '''
-        LSTM model with output layer to generate predictions.
+        GRU model with output layer to generate predictions.
 
         Args:
           num_series: number of input time series.
           hidden: number of hidden units.
         '''
-        super(LSTM, self).__init__()
+        super(GRU, self).__init__()
         self.p = num_series
         self.hidden = hidden
 
         # Set up network.
-        self.lstm = nn.LSTM(num_series, hidden, batch_first=True)
-        self.lstm.flatten_parameters()
+        self.gru = nn.GRU(num_series, hidden, batch_first=True)
+        self.gru.flatten_parameters()
         self.linear = nn.Conv1d(hidden, 1, 1)
 
     def init_hidden(self, batch):
-        '''Initialize hidden states for LSTM cell.'''
-        device = self.lstm.weight_ih_l0.device
-        return (torch.zeros(1, batch, self.hidden, device=device),
-                torch.zeros(1, batch, self.hidden, device=device))
+        '''Initialize hidden states for GRU cell.'''
+        device = self.gru.weight_ih_l0.device
+        return torch.zeros(1, batch, self.hidden, device=device)
 
     def forward(self, X, hidden=None):
         # Set up hidden state.
         if hidden is None:
             hidden = self.init_hidden(X.shape[0])
 
-        # Apply LSTM.
-        X, hidden = self.lstm(X, hidden)
+        # Apply GRU.
+        X, hidden = self.gru(X, hidden)
 
         # Calculate predictions using output layer.
         X = X.transpose(2, 1)
@@ -42,22 +41,22 @@ class LSTM(nn.Module):
         return X.transpose(2, 1), hidden
 
 
-class cLSTM(nn.Module):
+class cGRU(nn.Module):
     def __init__(self, num_series, hidden):
         '''
-        cLSTM model with one LSTM per time series.
+        cGRU model with one GRU per time series.
 
         Args:
           num_series: dimensionality of multivariate time series.
-          hidden: number of units in LSTM cell.
+          hidden: number of units in GRU cell.
         '''
-        super(cLSTM, self).__init__()
+        super(cGRU, self).__init__()
         self.p = num_series
         self.hidden = hidden
 
         # Set up networks.
         self.networks = nn.ModuleList([
-            LSTM(num_series, hidden) for _ in range(num_series)])
+            GRU(num_series, hidden) for _ in range(num_series)])
 
     def forward(self, X, hidden=None):
         '''
@@ -65,7 +64,7 @@ class cLSTM(nn.Module):
 
         Args:
           X: torch tensor of shape (batch, T, p).
-          hidden: hidden states for LSTM cell.
+          hidden: hidden states for GRU cell.
         '''
         if hidden is None:
             hidden = [None for _ in range(self.p)]
@@ -86,7 +85,7 @@ class cLSTM(nn.Module):
           GC: (p x p) matrix. Entry (i, j) indicates whether variable j is
             Granger causal of variable i.
         '''
-        GC = [torch.norm(net.lstm.weight_ih_l0, dim=0)
+        GC = [torch.norm(net.gru.weight_ih_l0, dim=0)
               for net in self.networks]
         GC = torch.stack(GC)
         if threshold:
@@ -97,16 +96,16 @@ class cLSTM(nn.Module):
 
 def prox_update(network, lam, lr):
     '''Perform in place proximal update on first layer weight matrix.'''
-    W = network.lstm.weight_ih_l0
+    W = network.gru.weight_ih_l0
     norm = torch.norm(W, dim=0, keepdim=True)
     W.data = ((W / torch.clamp(norm, min=(lam * lr)))
               * torch.clamp(norm - (lr * lam), min=0.0))
-    network.lstm.flatten_parameters()
+    network.gru.flatten_parameters()
 
 
 def regularize(network, lam):
     '''Calculate regularization term for first layer weight matrix.'''
-    W = network.lstm.weight_ih_l0
+    W = network.gru.weight_ih_l0
     return lam * torch.sum(torch.norm(W, dim=0))
 
 
@@ -114,7 +113,7 @@ def ridge_regularize(network, lam):
     '''Apply ridge penalty at linear layer and hidden-hidden weights.'''
     return lam * (
         torch.sum(network.linear.weight ** 2) +
-        torch.sum(network.lstm.weight_hh_l0 ** 2))
+        torch.sum(network.gru.weight_hh_l0 ** 2))
 
 
 def restore_parameters(model, best_model):
@@ -144,7 +143,7 @@ def arrange_input(data, context):
     return input.detach(), target.detach()
 
 
-def train_model_ista(clstm, X, context, lr, max_iter, lam=0, lam_ridge=0,
+def train_model_ista(cgru, X, context, lr, max_iter, lam=0, lam_ridge=0,
                      lookback=5, check_every=50, verbose=1):
     '''Train model with Adam.'''
     p = X.shape[-1]
@@ -162,35 +161,35 @@ def train_model_ista(clstm, X, context, lr, max_iter, lam=0, lam_ridge=0,
     best_model = None
 
     # Calculate smooth error.
-    pred = [clstm.networks[i](X)[0] for i in range(p)]
+    pred = [cgru.networks[i](X)[0] for i in range(p)]
     loss = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
-    ridge = sum([ridge_regularize(net, lam_ridge) for net in clstm.networks])
+    ridge = sum([ridge_regularize(net, lam_ridge) for net in cgru.networks])
     smooth = loss + ridge
 
     for it in range(max_iter):
         # Take gradient step.
         smooth.backward()
-        for param in clstm.parameters():
+        for param in cgru.parameters():
             param.data -= lr * param.grad
 
         # Take prox step.
         if lam > 0:
-            for net in clstm.networks:
+            for net in cgru.networks:
                 prox_update(net, lam, lr)
 
-        clstm.zero_grad()
+        cgru.zero_grad()
 
         # Calculate loss for next iteration.
-        pred = [clstm.networks[i](X)[0] for i in range(p)]
+        pred = [cgru.networks[i](X)[0] for i in range(p)]
         loss = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
         ridge = sum([ridge_regularize(net, lam_ridge)
-                     for net in clstm.networks])
+                     for net in cgru.networks])
         smooth = loss + ridge
 
         # Check progress.
         if (it + 1) % check_every == 0:
             # Add nonsmooth penalty.
-            nonsmooth = sum([regularize(net, lam) for net in clstm.networks])
+            nonsmooth = sum([regularize(net, lam) for net in cgru.networks])
             mean_loss = (smooth + nonsmooth) / p
             train_loss_list.append(mean_loss.detach())
 
@@ -198,19 +197,19 @@ def train_model_ista(clstm, X, context, lr, max_iter, lam=0, lam_ridge=0,
                 print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
                 print('Variable usage = %.2f%%'
-                      % (100 * torch.mean(clstm.GC().float())))
+                      % (100 * torch.mean(cgru.GC().float())))
 
             # Check for early stopping.
             if mean_loss < best_loss:
                 best_loss = mean_loss
                 best_it = it
-                best_model = deepcopy(clstm)
+                best_model = deepcopy(cgru)
             elif (it - best_it) == lookback * check_every:
                 if verbose:
                     print('Stopping early')
                 break
 
     # Restore best model.
-    restore_parameters(clstm, best_model)
+    restore_parameters(cgru, best_model)
 
     return train_loss_list
