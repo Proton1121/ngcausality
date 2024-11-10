@@ -120,25 +120,37 @@ def prox_update(network, lam, lr, penalty):
       penalty: one of GL (group lasso), GSGL (group sparse group lasso),
         H (hierarchical).
     '''
-    W = network.layers[0].weight
-    hidden, p, lag = W.shape
+    W1 = network.Linear_Seasonal.weight
+    W2 = network.Linear_Trend.weight
+    W_combined = torch.cat([network.Linear_Seasonal.weight, network.Linear_Trend.weight], dim=0)
+    hidden, p, lag = W1.shape
     if penalty == 'GL':
-        norm = torch.norm(W, dim=(0, 2), keepdim=True)
-        W.data = ((W / torch.clamp(norm, min=(lr * lam)))
+        norm = torch.norm(W_combined, dim=(0, 2), keepdim=True)
+        W1.data = ((W1 / torch.clamp(norm, min=(lr * lam)))
+                  * torch.clamp(norm - (lr * lam), min=0.0))
+        W2.data = ((W2 / torch.clamp(norm, min=(lr * lam)))
                   * torch.clamp(norm - (lr * lam), min=0.0))
     elif penalty == 'GSGL':
-        norm = torch.norm(W, dim=0, keepdim=True)
-        W.data = ((W / torch.clamp(norm, min=(lr * lam)))
+        norm = torch.norm(W_combined, dim=0, keepdim=True)
+        W1.data = ((W1 / torch.clamp(norm, min=(lr * lam)))
                   * torch.clamp(norm - (lr * lam), min=0.0))
-        norm = torch.norm(W, dim=(0, 2), keepdim=True)
-        W.data = ((W / torch.clamp(norm, min=(lr * lam)))
+        W2.data = ((W2 / torch.clamp(norm, min=(lr * lam)))
+                  * torch.clamp(norm - (lr * lam), min=0.0))
+        W_combined = torch.cat([network.Linear_Seasonal.weight, network.Linear_Trend.weight], dim=0)
+        norm = torch.norm(W_combined, dim=(0, 2), keepdim=True)
+        W1.data = ((W1 / torch.clamp(norm, min=(lr * lam)))
+                  * torch.clamp(norm - (lr * lam), min=0.0))
+        W2.data = ((W2 / torch.clamp(norm, min=(lr * lam)))
                   * torch.clamp(norm - (lr * lam), min=0.0))
     elif penalty == 'H':
         # Lowest indices along third axis touch most lagged values.
         for i in range(lag):
-            norm = torch.norm(W[:, :, :(i + 1)], dim=(0, 2), keepdim=True)
-            W.data[:, :, :(i+1)] = (
-                (W.data[:, :, :(i+1)] / torch.clamp(norm, min=(lr * lam)))
+            norm = torch.norm(W_combined[:, :, :(i + 1)], dim=(0, 2), keepdim=True)
+            W1.data[:, :, :(i+1)] = (
+                (W1.data[:, :, :(i+1)] / torch.clamp(norm, min=(lr * lam)))
+                * torch.clamp(norm - (lr * lam), min=0.0))
+            W2.data[:, :, :(i+1)] = (
+                (W2.data[:, :, :(i+1)] / torch.clamp(norm, min=(lr * lam)))
                 * torch.clamp(norm - (lr * lam), min=0.0))
     else:
         raise ValueError('unsupported penalty: %s' % penalty)
@@ -153,16 +165,18 @@ def regularize(network, lam, penalty):
       penalty: one of GL (group lasso), GSGL (group sparse group lasso),
         H (hierarchical).
     '''
-    W = network.layers[0].weight
-    hidden, p, lag = W.shape
+    W1 = network.Linear_Seasonal.weight
+    W2 = network.Linear_Trend.weight
+    W_combined = torch.cat([network.Linear_Seasonal.weight, network.Linear_Trend.weight], dim=0)
+    hidden, p, lag = W1.shape
     if penalty == 'GL':
-        return lam * torch.sum(torch.norm(W, dim=(0, 2)))
+        return lam * torch.sum(torch.norm(W_combined, dim=(0, 2)))
     elif penalty == 'GSGL':
-        return lam * (torch.sum(torch.norm(W, dim=(0, 2)))
-                      + torch.sum(torch.norm(W, dim=0)))
+        return lam * (torch.sum(torch.norm(W_combined, dim=(0, 2)))
+                      + torch.sum(torch.norm(W_combined, dim=0)))
     elif penalty == 'H':
         # Lowest indices along third axis touch most lagged values.
-        return lam * sum([torch.sum(torch.norm(W[:, :, :(i+1)], dim=(0, 2)))
+        return lam * sum([torch.sum(torch.norm(W_combined[:, :, :(i+1)], dim=(0, 2)))
                           for i in range(lag)])
     else:
         raise ValueError('unsupported penalty: %s' % penalty)
@@ -170,7 +184,7 @@ def regularize(network, lam, penalty):
 
 def ridge_regularize(network, lam):
     '''Apply ridge penalty at all subsequent layers.'''
-    return lam * sum([torch.sum(fc.weight ** 2) for fc in network.layers[1:]])
+    return lam * torch.sum(network.Linear_Decoder.weight ** 2) 
 
 
 def restore_parameters(model, best_model):
@@ -178,10 +192,10 @@ def restore_parameters(model, best_model):
     for params, best_params in zip(model.parameters(), best_model.parameters()):
         params.data = best_params
 
-def train_model_ista(cmlp, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
+def train_model_ista(cdlinear, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
                      lookback=5, check_every=100, verbose=1):
     '''Train model with Adam.'''
-    lag = cmlp.lag
+    lag = cdlinear.lag
     p = X.shape[-1]
     loss_fn = nn.MSELoss(reduction='mean')
     train_loss_list = []
@@ -192,35 +206,35 @@ def train_model_ista(cmlp, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
     best_model = None
 
     # Calculate smooth error.
-    loss = sum([loss_fn(cmlp.networks[i](X[:, :-1]), X[:, lag:, i:i+1])
+    loss = sum([loss_fn(cdlinear.networks[i](X[:, :-1]), X[:, lag:, i:i+1])
                 for i in range(p)])
-    ridge = sum([ridge_regularize(net, lam_ridge) for net in cmlp.networks])
+    ridge = sum([ridge_regularize(net, lam_ridge) for net in cdlinear.networks])
     smooth = loss + ridge
 
     for it in range(max_iter):
         # Take gradient step.
         smooth.backward()
-        for param in cmlp.parameters():
+        for param in cdlinear.parameters():
             param.data = param - lr * param.grad
 
         # Take prox step.
         if lam > 0:
-            for net in cmlp.networks:
+            for net in cdlinear.networks:
                 prox_update(net, lam, lr, penalty)
 
-        cmlp.zero_grad()
+        cdlinear.zero_grad()
 
         # Calculate loss for next iteration.
-        loss = sum([loss_fn(cmlp.networks[i](X[:, :-1]), X[:, lag:, i:i+1])
+        loss = sum([loss_fn(cdlinear.networks[i](X[:, :-1]), X[:, lag:, i:i+1])
                     for i in range(p)])
-        ridge = sum([ridge_regularize(net, lam_ridge) for net in cmlp.networks])
+        ridge = sum([ridge_regularize(net, lam_ridge) for net in cdlinear.networks])
         smooth = loss + ridge
 
         # Check progress.
         if (it + 1) % check_every == 0:
             # Add nonsmooth penalty.
             nonsmooth = sum([regularize(net, lam, penalty)
-                             for net in cmlp.networks])
+                             for net in cdlinear.networks])
             mean_loss = (smooth + nonsmooth) / p
             train_loss_list.append(mean_loss.detach())
 
@@ -228,19 +242,19 @@ def train_model_ista(cmlp, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
                 print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
                 print('Variable usage = %.2f%%'
-                      % (100 * torch.mean(cmlp.GC().float())))
+                      % (100 * torch.mean(cdlinear.GC().float())))
 
             # Check for early stopping.
             if mean_loss < best_loss:
                 best_loss = mean_loss
                 best_it = it
-                best_model = deepcopy(cmlp)
+                best_model = deepcopy(cdlinear)
             elif (it - best_it) == lookback * check_every:
                 if verbose:
                     print('Stopping early')
                 break
 
     # Restore best model.
-    restore_parameters(cmlp, best_model)
+    restore_parameters(cdlinear, best_model)
 
     return train_loss_list
