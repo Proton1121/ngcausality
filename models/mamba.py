@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mambapy.pscan import pscan
+from models.pscan import pscan
 
 """
 
@@ -65,64 +65,6 @@ class MambaConfig:
         # muP
         if self.mup:
             self.mup_width_mult = self.d_model / self.mup_base_width
-
-class Mamba(nn.Module):
-    def __init__(self, config: MambaConfig):
-        super().__init__()
-
-        self.config = config
-
-        self.layers = nn.ModuleList([ResidualBlock(config) for _ in range(config.n_layers)])
-
-    def forward(self, x):
-        # x : (B, L, D)
-
-        # y : (B, L, D)
-
-        for layer in self.layers:
-            x = layer(x)
-
-        return x
-    
-    def step(self, x, caches):
-        # x : (B, L, D)
-        # caches : [cache(layer) for all layers], cache : (h, inputs)
-
-        # y : (B, L, D)
-        # caches : [cache(layer) for all layers], cache : (h, inputs)
-
-        for i, layer in enumerate(self.layers):
-            x, caches[i] = layer.step(x, caches[i])
-
-        return x, caches
-
-class ResidualBlock(nn.Module):
-    def __init__(self, config: MambaConfig):
-        super().__init__()
-
-        self.mixer = MambaBlock(config)
-        self.norm = RMSNorm(config.d_model, config.rms_norm_eps, config.mup)
-
-    def forward(self, x):
-        # x : (B, L, D)
-
-        # output : (B, L, D)
-
-        output = self.mixer(self.norm(x)) + x
-        return output
-    
-    def step(self, x, cache):
-        # x : (B, D)
-        # cache : (h, inputs)
-                # h : (B, ED, N)
-                # inputs: (B, ED, d_conv-1)
-
-        # output : (B, D)
-        # cache : (h, inputs)
-
-        output, cache = self.mixer.step(self.norm(x), cache)
-        output = output + x
-        return output, cache
 
 class MambaBlock(nn.Module):
     def __init__(self, config: MambaConfig):
