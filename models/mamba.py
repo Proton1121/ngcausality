@@ -66,7 +66,7 @@ class MambaConfig:
         if self.mup:
             self.mup_width_mult = self.d_model / self.mup_base_width
 
-class MambaBlock(nn.Module):
+class Mamba(nn.Module):
     def __init__(self, config: MambaConfig):
         super().__init__()
 
@@ -115,7 +115,7 @@ class MambaBlock(nn.Module):
         self.D._no_weight_decay = True
 
         # projects block output from ED back to D
-        self.out_proj = nn.Linear(config.d_inner, config.d_model, bias=config.bias)
+        self.out_proj = nn.Linear(config.d_inner, 1, bias=config.bias)
 
         # used in jamba
         if self.config.inner_layernorms:
@@ -368,9 +368,139 @@ class RMSNorm(nn.Module):
 
     def forward(self, x):
         output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-        if not self.use_mup:
+    
+    if not self.use_mup:
             return output * self.weight
         else:
             return output
+
+class cMamba(nn.Module):
+    def __init__(self, config: MambaConfig):
+        
+        super(cMamba, self).__init__()
+        self.config = config
+
+        # Set up networks.
+        self.networks = nn.ModuleList([
+            Mamba(config) for _ in range(config.d_model)])
+
+    def forward(self, X):
     
+        return torch.cat([network(X) for network in self.networks], dim=2)
+    
+
+    
+    def GC(self, threshold=True):
+        
+        GC = [torch.norm(net.in_proj.weights, dim=0)
+              for net in self.networks]
+        GC = torch.stack(GC)
+        if threshold:
+            return (GC > 0).int()
+        else:
+            return GC
+        
+    def prox_update(network, lam, lr):
+    '''Perform in place proximal update on first layer weight matrix.'''
+    W = network.in_proj.weights
+    norm = torch.norm(W, dim=0, keepdim=True)
+    W.data = ((W / torch.clamp(norm, min=(lam * lr)))
+              * torch.clamp(norm - (lr * lam), min=0.0))
+
+
+    def regularize(network, lam):
+        '''Calculate regularization term for first layer weight matrix.'''
+        W = network.in_proj.weights
+        return lam * torch.sum(torch.norm(W, dim=0))
+
+    
+    def restore_parameters(model, best_model):
+        '''Move parameter values from best_model to model.'''
+        for params, best_params in zip(model.parameters(), best_model.parameters()):
+            params.data = best_params
+
+    def arrange_input(data, context):
+        '''
+        Arrange a single time series into overlapping short sequences.
+
+        Args:
+          data: time series of shape (T, dim).
+          context: length of short sequences.
+        '''
+        assert context >= 1 and isinstance(context, int)
+        input = torch.zeros(len(data) - context, context, data.shape[1],
+                            dtype=torch.float32, device=data.device)
+        target = torch.zeros(len(data) - context, context, data.shape[1],
+                             dtype=torch.float32, device=data.device)
+        for i in range(context):
+            start = i
+            end = len(data) - context + i
+            input[:, i, :] = data[start:end]
+            target[:, i, :] = data[start+1:end+1]
+        return input.detach(), target.detach()
+
+def train_model_ista(cmamba, X, context, lr, max_iter, lam=0, lam_ridge=0,
+                     lookback=5, check_every=50, verbose=1):
+    '''Train model with Adam.'''
+    p = X.shape[-1]
+    loss_fn = nn.MSELoss(reduction='mean')
+    train_loss_list = []
+
+    # Set up data.
+    X, Y = zip(*[arrange_input(x, context) for x in X])
+    X = torch.cat(X, dim=0)
+    Y = torch.cat(Y, dim=0)
+
+    # For early stopping.
+    best_it = None
+    best_loss = np.inf
+    best_model = None
+
+    # Calculate smooth error.
+    pred = [cmamba.networks[i](X) for i in range(p)]
+    smooth = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
+
+    for it in range(max_iter):
+        # Take gradient step.
+        smooth.backward()
+        for param in cmamba.parameters():
+            param.data -= lr * param.grad
+
+        # Take prox step.
+        if lam > 0:
+            for net in cmamba.networks:
+                prox_update(net, lam, lr)
+
+        cmamba.zero_grad()
+
+        # Calculate loss for next iteration.
+        pred = [cmamba.networks[i](X) for i in range(p)]
+        smooth = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
+
+        # Check progress.
+        if (it + 1) % check_every == 0:
+            # Add nonsmooth penalty.
+            nonsmooth = sum([regularize(net, lam) for net in cmamba.networks])
+            mean_loss = (smooth + nonsmooth) / p
+            train_loss_list.append(mean_loss.detach())
+
+            if verbose > 0:
+                print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
+                print('Loss = %f' % mean_loss)
+                print('Variable usage = %.2f%%'
+                      % (100 * torch.mean(cmamba.GC().float())))
+
+            # Check for early stopping.
+            if mean_loss < best_loss:
+                best_loss = mean_loss
+                best_it = it
+                best_model = deepcopy(cmamba)
+            elif (it - best_it) == lookback * check_every:
+                if verbose:
+                    print('Stopping early')
+                break
+
+    # Restore best model.
+    restore_parameters(cmamba, best_model)
+
+    return train_loss_list
