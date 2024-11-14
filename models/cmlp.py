@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from copy import deepcopy
-from models.model_helper import activation_helper
+from ngcausality.models.model_helper import activation_helper
 
 
 class MLP(nn.Module):
