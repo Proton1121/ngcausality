@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ngcausality.models.pscan import pscan
+from models.pscan import pscan
 
 """
 
