@@ -79,7 +79,7 @@ class cDLinear(nn.Module):
 
         return torch.cat([network(X) for network in self.networks], dim=2)
         
-def GC(self, threshold=True, ignore_lag=True):
+    def GC(self, threshold=True, ignore_lag=True):
         '''
         Extract learned Granger causality.
 
