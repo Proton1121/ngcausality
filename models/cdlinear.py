@@ -54,8 +54,8 @@ class DLinear(nn.Module):
     def forward(self, X):
         
         seasonal_init, trend_init = self.decompsition(X)
-        seasonal_output = self.Linear_Seasonal(seasonal_init)
-        trend_output = self.Linear_Trend(trend_init)
+        seasonal_output = self.Linear_Seasonal(seasonal_init.transpose(2,1))
+        trend_output = self.Linear_Trend(trend_init.transpose(2,1))
 
         X = seasonal_output + trend_output
         X = self.Linear_Decoder(X)
