@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from copy import deepcopy
 
 class moving_avg(nn.Module):
     """
@@ -50,8 +51,7 @@ class DLinear(nn.Module):
         self.Linear_Decoder = nn.Conv1d(hidden, 1, 1)
         
 
-    def forward(self, x):
-         X = X.transpose(2, 1)
+    def forward(self, X):
         
         seasonal_init, trend_init = self.decompsition(X)
         seasonal_output = self.Linear_Seasonal(seasonal_init)
@@ -66,9 +66,6 @@ class cDLinear(nn.Module):
     def __init__(self, num_series, hidden, lag, kernel_size = 25):
         super(cDLinear, self).__init__()
 
-        # Decompsition Kernel Size
-        self.decompsition = series_decomp(kernel_size)
-
         self.p = num_series
         self.lag = lag
 
@@ -78,7 +75,7 @@ class cDLinear(nn.Module):
             for _ in range(num_series)])
         
 
-    def forward(self, x):
+    def forward(self, X):
 
         return torch.cat([network(X) for network in self.networks], dim=2)
         
