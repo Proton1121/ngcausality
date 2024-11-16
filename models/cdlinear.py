@@ -208,6 +208,9 @@ def train_model_ista(cdlinear, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
     ridge = sum([ridge_regularize(net, lam_ridge) for net in cdlinear.networks])
     smooth = loss + ridge
 
+    print('%f' % loss)
+    print('%f' % ridge)
+
     for it in range(max_iter):
         # Take gradient step.
         smooth.backward()
