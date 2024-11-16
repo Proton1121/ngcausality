@@ -369,7 +369,7 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
     
-    if not self.use_mup:
+        if not self.use_mup:
             return output * self.weight
         else:
             return output
@@ -401,11 +401,11 @@ class cMamba(nn.Module):
             return GC
         
     def prox_update(network, lam, lr):
-    '''Perform in place proximal update on first layer weight matrix.'''
-    W = network.in_proj.weights
-    norm = torch.norm(W, dim=0, keepdim=True)
-    W.data = ((W / torch.clamp(norm, min=(lam * lr)))
-              * torch.clamp(norm - (lr * lam), min=0.0))
+        '''Perform in place proximal update on first layer weight matrix.'''
+        W = network.in_proj.weights
+        norm = torch.norm(W, dim=0, keepdim=True)
+        W.data = ((W / torch.clamp(norm, min=(lam * lr)))
+                  * torch.clamp(norm - (lr * lam), min=0.0))
 
 
     def regularize(network, lam):
