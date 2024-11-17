@@ -239,7 +239,7 @@ def train_model_ista(cdlinear, X, lr, max_iter, lam=0, lam_ridge=0, penalty='H',
                 print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
                 print('nonsmooth = %f' % (nonsmooth / p))
-                print('smooth = %f' % (smooth / p)
+                print('smooth = %f' % (smooth / p))
                 print('Variable usage = %.2f%%'
                       % (100 * torch.mean(cdlinear.GC().float())))
 
