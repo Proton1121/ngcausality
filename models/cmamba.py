@@ -31,7 +31,6 @@ See Figure 3 of the paper (page 8) for a visual representation of a MambaBlock.
 @dataclass
 class MambaConfig:
     d_model: int # D
-    n_layers: int
     dt_rank: Union[int, str] = 'auto'
     d_state: int = 16 # N in paper/comments
     expand_factor: int = 2 # E in paper/comments
