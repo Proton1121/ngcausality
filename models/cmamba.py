@@ -394,6 +394,19 @@ def arrange_input(data, context):
         target[:, i, :] = data[start+1:end+1]
     return input.detach(), target.detach()
 
+def prox_update(network, lam, lr):
+    '''Perform in place proximal update on first layer weight matrix.'''
+    W = network.mamba.in_proj.weight
+    norm = torch.norm(W, dim=0, keepdim=True)
+    W.data = ((W / torch.clamp(norm, min=(lam * lr)))
+              * torch.clamp(norm - (lr * lam), min=0.0))
+
+
+def regularize(network, lam):
+    '''Calculate regularization term for first layer weight matrix.'''
+    W = network.mamba.in_proj.weight
+    return lam * torch.sum(torch.norm(W, dim=0))
+
 class cMamba(nn.Module):
     def __init__(self, config: MambaConfig):
         
