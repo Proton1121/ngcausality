@@ -374,39 +374,6 @@ class RMSNorm(nn.Module):
         else:
             return output
 
-def arrange_input(data, context):
-    '''
-    Arrange a single time series into overlapping short sequences.
-
-    Args:
-      data: time series of shape (T, dim).
-      context: length of short sequences.
-    '''
-    assert context >= 1 and isinstance(context, int)
-    input = torch.zeros(len(data) - context, context, data.shape[1],
-                        dtype=torch.float32, device=data.device)
-    target = torch.zeros(len(data) - context, context, data.shape[1],
-                         dtype=torch.float32, device=data.device)
-    for i in range(context):
-        start = i
-        end = len(data) - context + i
-        input[:, i, :] = data[start:end]
-        target[:, i, :] = data[start+1:end+1]
-    return input.detach(), target.detach()
-
-def prox_update(network, lam, lr):
-    '''Perform in place proximal update on first layer weight matrix.'''
-    W = network.mamba.in_proj.weight
-    norm = torch.norm(W, dim=0, keepdim=True)
-    W.data = ((W / torch.clamp(norm, min=(lam * lr)))
-              * torch.clamp(norm - (lr * lam), min=0.0))
-
-
-def regularize(network, lam):
-    '''Calculate regularization term for first layer weight matrix.'''
-    W = network.mamba.in_proj.weight
-    return lam * torch.sum(torch.norm(W, dim=0))
-
 class cMamba(nn.Module):
     def __init__(self, config: MambaConfig):
         
@@ -433,44 +400,44 @@ class cMamba(nn.Module):
         else:
             return GC
         
-    def prox_update(network, lam, lr):
-        '''Perform in place proximal update on first layer weight matrix.'''
-        W = network.in_proj.weights
-        norm = torch.norm(W, dim=0, keepdim=True)
-        W.data = ((W / torch.clamp(norm, min=(lam * lr)))
+def prox_update(network, lam, lr):
+    '''Perform in place proximal update on first layer weight matrix.'''
+    W = network.in_proj.weights
+    norm = torch.norm(W, dim=0, keepdim=True)
+    W.data = ((W / torch.clamp(norm, min=(lam * lr)))
                   * torch.clamp(norm - (lr * lam), min=0.0))
 
 
-    def regularize(network, lam):
-        '''Calculate regularization term for first layer weight matrix.'''
-        W = network.in_proj.weights
-        return lam * torch.sum(torch.norm(W, dim=0))
+def regularize(network, lam):
+    '''Calculate regularization term for first layer weight matrix.'''
+    W = network.in_proj.weights
+    return lam * torch.sum(torch.norm(W, dim=0))
 
     
-    def restore_parameters(model, best_model):
-        '''Move parameter values from best_model to model.'''
-        for params, best_params in zip(model.parameters(), best_model.parameters()):
-            params.data = best_params
+def restore_parameters(model, best_model):
+    '''Move parameter values from best_model to model.'''
+    for params, best_params in zip(model.parameters(), best_model.parameters()):
+        params.data = best_params
 
-    def arrange_input(data, context):
-        '''
-        Arrange a single time series into overlapping short sequences.
+def arrange_input(data, context):
+    '''
+    Arrange a single time series into overlapping short sequences.
 
-        Args:
-          data: time series of shape (T, dim).
-          context: length of short sequences.
-        '''
-        assert context >= 1 and isinstance(context, int)
-        input = torch.zeros(len(data) - context, context, data.shape[1],
-                            dtype=torch.float32, device=data.device)
-        target = torch.zeros(len(data) - context, context, data.shape[1],
-                             dtype=torch.float32, device=data.device)
-        for i in range(context):
-            start = i
-            end = len(data) - context + i
-            input[:, i, :] = data[start:end]
-            target[:, i, :] = data[start+1:end+1]
-        return input.detach(), target.detach()
+    Args:
+        data: time series of shape (T, dim).
+        context: length of short sequences.
+    '''
+    assert context >= 1 and isinstance(context, int)
+    input = torch.zeros(len(data) - context, context, data.shape[1],
+                        dtype=torch.float32, device=data.device)
+    target = torch.zeros(len(data) - context, context, data.shape[1],
+                         dtype=torch.float32, device=data.device)
+    for i in range(context):
+       start = i
+       end = len(data) - context + i
+       input[:, i, :] = data[start:end]
+       target[:, i, :] = data[start+1:end+1]
+    return input.detach(), target.detach()
 
 def train_model_ista(cmamba, X, context, lr, max_iter, lam=0, lam_ridge=0,
                      lookback=5, check_every=50, verbose=1):
