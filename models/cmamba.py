@@ -392,7 +392,7 @@ class cMamba(nn.Module):
     
     def GC(self, threshold=True):
         
-        GC = [torch.norm(net.in_proj.weights, dim=0)
+        GC = [torch.norm(net.in_proj.weight, dim=0)
               for net in self.networks]
         GC = torch.stack(GC)
         if threshold:
