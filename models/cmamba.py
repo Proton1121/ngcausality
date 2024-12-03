@@ -17,17 +17,6 @@ The major differences are :
 -the convolution is done with torch.nn.Conv1d
 -the selective scan is done in PyTorch
 
-A sequential version of the selective scan is also available for comparison. Also, it is possible to use the official Mamba implementation.
-
-This is the structure of the torch modules :
-- A Mamba model is composed of several layers, which are ResidualBlock.
-- A ResidualBlock is composed of a MambaBlock, a normalization, and a residual connection : ResidualBlock(x) = mamba(norm(x)) + x
-- This leaves us with the MambaBlock : its input x is (B, L, D) and its outputs y is also (B, L, D) (B=batch size, L=seq len, D=model dim).
-First, we expand x into (B, L, 2*ED) (where E is usually 2) and split it into x and z, each (B, L, ED).
-Then, we apply the short 1d conv to x, followed by an activation function (silu), then the SSM.
-We then multiply it by silu(z).
-See Figure 3 of the paper (page 8) for a visual representation of a MambaBlock.
-
 """
 
 @dataclass
@@ -270,26 +259,6 @@ class Mamba(nn.Module):
         return y
     
     # -------------------------- inference -------------------------- #
-    """
-    Concerning auto-regressive inference
-
-    The cool part of using Mamba : inference is constant wrt to sequence length
-    We just have to keep in cache, for each layer, two things :
-    - the hidden state h (which is (B, ED, N)), as you typically would when doing inference with a RNN
-    - the last d_conv-1 inputs of the layer, to be able to compute the 1D conv which is a convolution over the time dimension
-      (d_conv is fixed so this doesn't incur a growing cache as we progress on generating the sequence)
-      (and d_conv is usually very small, like 4, so we just have to "remember" the last 3 inputs)
-
-    Concretely, these two quantities are put inside a cache tuple, and are named h and inputs respectively.
-    h is (B, ED, N), and inputs is (B, ED, d_conv-1)
-    The MambaBlock.step() receives this cache, and, along with outputing the output, alos outputs the updated cache for the next call.
-
-    The cache object is initialized as follows : (None, torch.zeros()).
-    When h is None, the selective scan function detects it and start with h=0.
-    The torch.zeros() isn't a problem (it's same as just feeding the input, because the conv1d is padded)
-
-    As we need one such cache variable per layer, we store a caches object, which is simply a list of cache object. (See mamba_lm.py)
-    """
     
     def step(self, x, cache):
         # x : (B, D)
