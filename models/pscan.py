@@ -6,7 +6,6 @@ import torch.nn.functional as F
 """
 
 An implementation of the parallel scan operation in PyTorch (Blelloch version).
-Please see docs/pscan.ipynb for a detailed explanation of what happens here.
 
 """
 
